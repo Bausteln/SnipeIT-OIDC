@@ -5,12 +5,12 @@
 #   mkdir my-snipeit-build && cd my-snipeit-build
 #   git clone git@github.com:Bausteln/SnipeIT-OIDC.git snipeit-oidc
 #   cp snipeit-oidc/examples/Dockerfile .
-#   docker build --build-arg SNIPEIT_VERSION=v7.0.13 \
-#                -t registry.example.com/snipeit-oidc:v7.0.13-oidc1 .
+#   docker build --build-arg SNIPEIT_VERSION=v8.5.0 \
+#                -t registry.example.com/snipeit-oidc:v8.5.0-oidc1 .
 #
 # The build expects `snipeit-oidc/` to sit next to the Dockerfile.
 
-ARG SNIPEIT_VERSION=v7.0.13
+ARG SNIPEIT_VERSION=v8.5.0
 FROM snipe/snipe-it:${SNIPEIT_VERSION}
 
 # Vendor the plugin

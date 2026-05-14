@@ -190,15 +190,15 @@ baked in. The flow is:
 mkdir my-snipeit && cd my-snipeit
 git clone git@github.com:Bausteln/SnipeIT-OIDC.git snipeit-oidc
 cp snipeit-oidc/examples/Dockerfile .
-docker build --build-arg SNIPEIT_VERSION=v7.0.13 \
-             -t snipeit-oidc:v7.0.13-oidc1 .
+docker build --build-arg SNIPEIT_VERSION=v8.5.0 \
+             -t snipeit-oidc:v8.5.0-oidc1 .
 ```
 
 Push to a registry if you're deploying to a different host:
 
 ```bash
-docker tag  snipeit-oidc:v7.0.13-oidc1 registry.example.com/snipeit-oidc:v7.0.13-oidc1
-docker push registry.example.com/snipeit-oidc:v7.0.13-oidc1
+docker tag  snipeit-oidc:v8.5.0-oidc1 registry.example.com/snipeit-oidc:v8.5.0-oidc1
+docker push registry.example.com/snipeit-oidc:v8.5.0-oidc1
 ```
 
 ### 2. docker-compose stack
@@ -208,12 +208,12 @@ docker push registry.example.com/snipeit-oidc:v7.0.13-oidc1
 ```yaml
 services:
   snipeit:
-    image: snipeit-oidc:v7.0.13-oidc1
+    image: snipeit-oidc:v8.5.0-oidc1
     # Or build inline (delete the image: line above if you do):
     # build:
     #   context: .
     #   args:
-    #     SNIPEIT_VERSION: v7.0.13
+    #     SNIPEIT_VERSION: v8.5.0
     ports:
       - "8080:80"            # bind to 127.0.0.1:8080 if a reverse proxy fronts it
     env_file: .env
@@ -398,7 +398,7 @@ Save next to the `snipeit-oidc/` directory:
 
 ```dockerfile
 # Dockerfile
-ARG SNIPEIT_VERSION=v7.0.13
+ARG SNIPEIT_VERSION=v8.5.0
 FROM snipe/snipe-it:${SNIPEIT_VERSION}
 
 # 1. Copy the plugin into the image
@@ -426,8 +426,8 @@ RUN chown -R www-data:www-data packages/snipeit-oidc
 Build and push:
 
 ```bash
-docker build -t registry.example.com/snipeit-oidc:v7.0.13-oidc1 .
-docker push   registry.example.com/snipeit-oidc:v7.0.13-oidc1
+docker build -t registry.example.com/snipeit-oidc:v8.5.0-oidc1 .
+docker push   registry.example.com/snipeit-oidc:v8.5.0-oidc1
 ```
 
 > Pin the Snipe-IT version. Don't use `:latest` — auth code is exactly
@@ -499,7 +499,7 @@ spec:
     spec:
       containers:
         - name: snipeit
-          image: registry.example.com/snipeit-oidc:v7.0.13-oidc1
+          image: registry.example.com/snipeit-oidc:v8.5.0-oidc1
           ports:
             - containerPort: 80
           envFrom:
