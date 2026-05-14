@@ -638,7 +638,13 @@ Ingress; you only need the custom image and the values overrides.
 - **Sessions** are Snipe-IT's normal Laravel sessions. The OIDC tokens
   are not stored — we exchange them for a Snipe-IT login once and discard.
 - **Upgrades:** Snipe-IT changes its `User` model rarely, but check
-  `OidcUserResolver` after major Snipe-IT releases.
+  `OidcUserResolver` after major Snipe-IT releases. The plugin is audited
+  against **Snipe-IT v8.5.0** (Laravel 12, PHP 8.2+) as of the v0.2.0 tag.
+- **Upstream moved:** as of Snipe-IT v8.1.0, the GitHub repo is at
+  `grokability/snipe-it` — the old `snipe/snipe-it` is a redirect that
+  occasionally breaks. The Docker Hub image namespace stayed `snipe/snipe-it`,
+  so the Dockerfile examples in this README don't need updating, but
+  bare-install users should `git clone` from `grokability/snipe-it`.
 
 ---
 

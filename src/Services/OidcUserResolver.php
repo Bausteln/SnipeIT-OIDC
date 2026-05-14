@@ -29,9 +29,33 @@ class OidcUserResolver
         }
 
         // Look existing user up by username first (Snipe-IT's primary identity
-        // field), then fall back to email.
+        // field), then fall back to email. The default Eloquent query excludes
+        // soft-deleted rows via the SoftDeletes trait's global scope.
         $user = User::where('username', $username)->first()
             ?: User::where('email', $email)->first();
+
+        // If no active match, check whether a soft-deleted record blocks this
+        // identity. Auto-provisioning would either fail (unique_undeleted) or
+        // create a parallel account with no asset history — both bad. Refuse
+        // login and surface the case clearly so an admin can either restore
+        // the user in Snipe-IT or remove them from the IdP.
+        if (! $user) {
+            $trashed = User::onlyTrashed()
+                ->where(function ($q) use ($username, $email) {
+                    if ($username) { $q->where('username', $username); }
+                    if ($email)    { $q->orWhere('email', $email); }
+                })
+                ->first();
+            if ($trashed) {
+                Log::warning('OIDC: refusing login — Snipe-IT account is soft-deleted', [
+                    'username'        => $username,
+                    'email'           => $email,
+                    'trashed_user_id' => $trashed->id,
+                    'hint'            => 'Restore the user in Snipe-IT or remove them from the IdP.',
+                ]);
+                return null;
+            }
+        }
 
         if (! $user && config('oidc.provisioning') === 'existing') {
             return null; // Strict mode: don't create on the fly.
@@ -52,17 +76,31 @@ class OidcUserResolver
     {
         $map = config('oidc.claim_map');
 
-        $user = new User();
-        $user->username   = $claims[$map['username']] ?? Str::before($claims[$map['email']], '@');
-        $user->email      = $claims[$map['email']]    ?? null;
-        $user->first_name = $claims[$map['first_name']] ?? '';
-        $user->last_name  = $claims[$map['last_name']]  ?? '';
-        $user->activated  = 1;
-        // Random password — login is via OIDC only. Length matches Snipe-IT defaults.
-        $user->password   = bcrypt(Str::random(40));
-        $user->permissions = json_encode(config('oidc.default_permissions'));
-        $user->save();
+        $email     = $claims[$map['email']]      ?? null;
+        $username  = $claims[$map['username']]   ?? ($email ? Str::before($email, '@') : null);
+        $firstName = $claims[$map['first_name']] ?? null;
+        $lastName  = $claims[$map['last_name']]  ?? null;
 
+        // Snipe-IT's ValidatingTrait enforces `first_name => required` at the
+        // model level. Fall back to the email local-part so login never fails
+        // on an IdP profile that's missing `given_name`. Admins can fix it in
+        // the Snipe-IT UI later; the next OIDC login will sync from claims if
+        // the IdP starts sending the name.
+        if (! $firstName) {
+            $firstName = $email ? Str::before($email, '@') : 'OIDC User';
+        }
+
+        $user = new User();
+        $user->username    = $username;
+        $user->email       = $email;
+        $user->first_name  = $firstName;
+        $user->last_name   = $lastName ?? '';
+        $user->activated   = 1;
+        // Random password — login is via OIDC only. Length matches Snipe-IT defaults.
+        $user->password    = bcrypt(Str::random(40));
+        $user->permissions = json_encode(config('oidc.default_permissions'));
+
+        $this->saveOrThrow($user, 'provision');
         return $user;
     }
 
@@ -74,7 +112,32 @@ class OidcUserResolver
         $user->email      = $claims[$map['email']]      ?? $user->email;
         $user->first_name = $claims[$map['first_name']] ?? $user->first_name;
         $user->last_name  = $claims[$map['last_name']]  ?? $user->last_name;
-        $user->save();
+
+        $this->saveOrThrow($user, 'syncFromClaims');
+    }
+
+    /**
+     * Persist a User and surface validation errors with enough context to
+     * debug from logs alone. Snipe-IT uses watson/validating, which throws
+     * ValidationException on save() — the default exception message ("The
+     * given data was invalid.") is useless without the underlying errors.
+     */
+    private function saveOrThrow(User $user, string $phase): void
+    {
+        try {
+            $user->save();
+        } catch (\Throwable $e) {
+            Log::error('OIDC: Snipe-IT User save failed', [
+                'phase'      => $phase,
+                'username'   => $user->username,
+                'email'      => $user->email,
+                'first_name' => $user->first_name,
+                'message'    => $e->getMessage(),
+                // watson/validating exposes per-field errors via getErrors()
+                'errors'     => method_exists($e, 'getErrors') ? $e->getErrors() : null,
+            ]);
+            throw $e;
+        }
     }
 
     /**
@@ -101,7 +164,7 @@ class OidcUserResolver
             unset($perms['superuser']);
         }
         $user->permissions = json_encode($perms);
-        $user->save();
+        $this->saveOrThrow($user, 'applyGroupMapping');
 
         $groupIds = Group::whereIn('name', $claimGroups)->pluck('id')->all();
         $missing  = array_diff($claimGroups, Group::whereIn('name', $claimGroups)->pluck('name')->all());

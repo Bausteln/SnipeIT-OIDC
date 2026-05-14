@@ -17,9 +17,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Snipe-IT v7 supports PHP 8.1+. We test the whole supported range
-        # so a future contributor doesn't accidentally use 8.2+-only syntax.
-        php: ['8.1', '8.2', '8.3']
+        # Snipe-IT v8 requires PHP 8.2+ (v8.5.0 recommends 8.4+). We test the
+        # full supported range so a future contributor doesn't ship code that
+        # only parses on the newest runtime, and so version-skewed installs
+        # are covered.
+        php: ['8.2', '8.3', '8.4']
 
     steps:
       - uses: actions/checkout@v6
