@@ -1,0 +1,32 @@
+# Example: custom Snipe-IT image with snipeit-oidc baked in.
+#
+# Intended usage:
+#
+#   mkdir my-snipeit-build && cd my-snipeit-build
+#   git clone git@github.com:Bausteln/SnipeIT-OIDC.git snipeit-oidc
+#   cp snipeit-oidc/examples/Dockerfile .
+#   docker build --build-arg SNIPEIT_VERSION=v7.0.13 \
+#                -t registry.example.com/snipeit-oidc:v7.0.13-oidc1 .
+#
+# The build expects `snipeit-oidc/` to sit next to the Dockerfile.
+
+ARG SNIPEIT_VERSION=v7.0.13
+FROM snipe/snipe-it:${SNIPEIT_VERSION}
+
+# Vendor the plugin
+COPY snipeit-oidc /var/www/html/packages/snipeit-oidc
+
+# Register and install
+WORKDIR /var/www/html
+RUN composer config repositories.snipeit-oidc path packages/snipeit-oidc \
+ && composer require bausteln/snipeit-oidc:* --no-interaction --no-scripts \
+ && composer dump-autoload --optimize
+
+# Patch the login template. Fails the build (rather than producing a broken
+# image) if the anchor isn't found — re-verify after any Snipe-IT upgrade.
+RUN sed -i '0,/<\/form>/{s|</form>|</form>\n        @include('"'"'oidc::login-button'"'"')|}' \
+        resources/views/auth/login.blade.php \
+ && grep -q "oidc::login-button" resources/views/auth/login.blade.php \
+        || (echo "ERROR: login.blade.php patch did not apply — check Snipe-IT version" && exit 1)
+
+RUN chown -R www-data:www-data packages/snipeit-oidc

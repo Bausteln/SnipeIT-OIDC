@@ -1,0 +1,22 @@
+# PHP / Composer
+/vendor/
+composer.lock
+composer.phar
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Local env / secrets — must never reach the repo
+.env
+.env.*
+!.env.example
+
+# Test / build artifacts
+.phpunit.result.cache
+coverage/
+build/
