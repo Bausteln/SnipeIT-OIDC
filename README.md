@@ -173,6 +173,210 @@ method for the three common strategies (additive / authoritative / first-login).
 
 ---
 
+## Docker deployment
+
+For installs that don't need a full Kubernetes orchestrator,
+`docker compose` is the simplest way to run Snipe-IT with this plugin
+baked in. The flow is:
+
+1. Build a custom Snipe-IT image with the plugin vendored in
+2. Stand up Snipe-IT + MariaDB with `docker compose`
+3. Front it with TLS (in production)
+4. Register the callback URL in Authentik
+
+### 1. Build the custom image
+
+```bash
+mkdir my-snipeit && cd my-snipeit
+git clone git@github.com:Bausteln/SnipeIT-OIDC.git snipeit-oidc
+cp snipeit-oidc/examples/Dockerfile .
+docker build --build-arg SNIPEIT_VERSION=v7.0.13 \
+             -t snipeit-oidc:v7.0.13-oidc1 .
+```
+
+Push to a registry if you're deploying to a different host:
+
+```bash
+docker tag  snipeit-oidc:v7.0.13-oidc1 registry.example.com/snipeit-oidc:v7.0.13-oidc1
+docker push registry.example.com/snipeit-oidc:v7.0.13-oidc1
+```
+
+### 2. docker-compose stack
+
+`docker-compose.yml`:
+
+```yaml
+services:
+  snipeit:
+    image: snipeit-oidc:v7.0.13-oidc1
+    # Or build inline (delete the image: line above if you do):
+    # build:
+    #   context: .
+    #   args:
+    #     SNIPEIT_VERSION: v7.0.13
+    ports:
+      - "8080:80"            # bind to 127.0.0.1:8080 if a reverse proxy fronts it
+    env_file: .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - uploads:/var/www/html/public/uploads
+      - storage:/var/www/html/storage
+    restart: unless-stopped
+
+  mysql:
+    image: mariadb:11
+    environment:
+      MARIADB_DATABASE: snipeit
+      MARIADB_USER: snipeit
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  storage:
+  mysql:
+```
+
+### 3. Environment file
+
+`.env` (alongside `docker-compose.yml` — make sure it's in `.gitignore`):
+
+```ini
+# --- Snipe-IT ---
+APP_URL=https://snipeit.example.com
+APP_ENV=production
+APP_DEBUG=false
+APP_KEY=base64:GENERATE_ME           # see below
+
+# --- Database ---
+DB_CONNECTION=mysql
+DB_HOST=mysql
+DB_DATABASE=snipeit
+DB_USERNAME=snipeit
+DB_PASSWORD=change-this-strong-password
+DB_ROOT_PASSWORD=different-strong-password
+
+# --- OIDC plugin ---
+OIDC_ENABLED=true
+OIDC_PROVIDER_URL=https://authentik.example.com/application/o/snipeit/
+OIDC_CLIENT_ID=snipeit
+OIDC_CLIENT_SECRET=copy-from-authentik
+OIDC_SCOPES="openid profile email groups"
+OIDC_PROVISIONING=jit
+OIDC_ADMIN_GROUPS=snipeit-admins
+```
+
+Generate the `APP_KEY` once and paste the output into `.env`:
+
+```bash
+echo "APP_KEY=base64:$(openssl rand -base64 32)"
+```
+
+> ⚠️ `APP_KEY` rotates session cookies and encrypted DB columns. Set it
+> **before first launch** and never change it on a populated database.
+
+### 4. Launch
+
+```bash
+docker compose up -d
+docker compose logs -f snipeit       # watch boot + migrations
+```
+
+First boot runs Snipe-IT's migrations automatically. Once the logs
+settle, open `${APP_URL}` and:
+
+1. **Complete the Snipe-IT setup wizard** — create the first local admin.
+   Keep this account: it's your break-glass if OIDC ever breaks.
+2. Log out, click **Login with SSO**, verify the round-trip to Authentik.
+3. Optionally, demote your local admin to a regular user once at least
+   one OIDC-provisioned superuser exists.
+
+### 5. TLS in production
+
+The official Snipe-IT image ships **HTTP-only** Apache. In production
+you almost always want a reverse proxy in front of it:
+
+- **Caddy** is the lowest-effort: a single-line `Caddyfile`
+  (`snipeit.example.com { reverse_proxy snipeit:80 }`) gets you
+  automatic Let's Encrypt certs.
+- **Traefik** if you already run it for other containers.
+- **Nginx + certbot** if you need fine-grained control.
+
+The OIDC plugin builds the `redirect_uri` from `APP_URL`, so set that
+to the **public HTTPS URL**, not `http://localhost:8080`. Get this wrong
+and you'll see a `redirect_uri_mismatch` from Authentik.
+
+A minimal Caddy add-on to the compose file:
+
+```yaml
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+```
+
+`Caddyfile`:
+
+```caddy
+snipeit.example.com {
+    reverse_proxy snipeit:80
+}
+```
+
+Then change the Snipe-IT service to expose only on the internal network
+(remove the `ports:` block) and set `APP_URL=https://snipeit.example.com`.
+
+### 6. Authentik registration
+
+Identical to the bare-install case — see
+[Authentik](#authentik-recommended-setup-for-this-install) above. The
+only Docker-specific note: the redirect URI must match `APP_URL`
+exactly, including scheme and port (or lack thereof). Mixing
+`http://localhost:8080` in the `.env` with `https://snipeit.example.com`
+in Authentik is the single most common failure mode.
+
+### Operational tips
+
+- **Backups:**
+  ```bash
+  docker compose exec mysql mariadb-dump -uroot -p"$DB_ROOT_PASSWORD" snipeit > backup-$(date +%F).sql
+  ```
+  Plus a snapshot of the `uploads` and `storage` named volumes for files.
+- **Upgrading Snipe-IT:** bump `SNIPEIT_VERSION` in the Dockerfile,
+  rebuild, `docker compose up -d`. Migrations run on container boot.
+- **Upgrading this plugin:**
+  `cd snipeit-oidc && git pull && cd .. && docker compose build && docker compose up -d`.
+- **Logs:**
+  - App: `docker compose logs -f snipeit`
+  - Plugin-specific errors: `docker compose exec snipeit tail -f storage/logs/laravel.log`
+- **Sessions** are file-based and stored on the `storage` volume — fine
+  for a single Snipe-IT replica. For HA, switch to `SESSION_DRIVER=redis`
+  and add a Redis service.
+- **Hard reset (dev only):** `docker compose down -v` wipes all volumes,
+  including the database. Never run this in production.
+
+---
+
 ## Kubernetes deployment
 
 Snipe-IT runs cleanly in Kubernetes from the official `snipe/snipe-it`
