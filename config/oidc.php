@@ -15,6 +15,12 @@ return [
     // Master switch. If false, the OIDC button is hidden and routes 404.
     'enabled' => env('OIDC_ENABLED', false),
 
+    // When true, GET /login automatically redirects anonymous users straight
+    // to the IdP, bypassing the Snipe-IT password form. Escape hatch: any
+    // request with ?local=true (or the Snipe-IT-native ?nosaml=true) keeps
+    // the local form reachable so an admin can still log in if SSO is broken.
+    'auto_redirect' => env('OIDC_AUTO_REDIRECT', false),
+
     // The discovery URL of your IdP, e.g.
     //   https://accounts.google.com
     //   https://login.microsoftonline.com/<tenant>/v2.0

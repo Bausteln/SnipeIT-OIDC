@@ -2,6 +2,8 @@
 
 namespace Bausteln\SnipeitOidc\Providers;
 
+use Bausteln\SnipeitOidc\Http\Middleware\AutoRedirectToOidc;
+use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Route;
 
@@ -29,5 +31,9 @@ class OidcServiceProvider extends ServiceProvider
             ->group(__DIR__ . '/../../routes/web.php');
 
         $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'oidc');
+
+        // Push onto the `web` middleware group (not the global stack) so the
+        // session is started before we run — Auth::check() needs it.
+        $this->app->make(Router::class)->pushMiddlewareToGroup('web', AutoRedirectToOidc::class);
     }
 }
