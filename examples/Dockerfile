@@ -16,9 +16,12 @@ FROM snipe/snipe-it:${SNIPEIT_VERSION}
 # Vendor the plugin
 COPY snipeit-oidc /var/www/html/packages/snipeit-oidc
 
-# Register and install
+# Register and install. The optional `composer_auth` buildkit secret carries
+# COMPOSER_AUTH JSON (e.g. {"github-oauth":{"github.com":"<token>"}}) so
+# transitive metadata fetches don't hit anonymous GitHub rate limits.
 WORKDIR /var/www/html
-RUN composer config repositories.snipeit-oidc path packages/snipeit-oidc \
+RUN --mount=type=secret,id=composer_auth,env=COMPOSER_AUTH,required=false \
+    composer config repositories.snipeit-oidc path packages/snipeit-oidc \
  && composer require 'bausteln/snipeit-oidc:*@dev' --no-interaction --no-scripts \
  && composer dump-autoload --optimize
 
