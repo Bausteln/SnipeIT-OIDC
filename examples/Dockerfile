@@ -19,7 +19,7 @@ COPY snipeit-oidc /var/www/html/packages/snipeit-oidc
 # Register and install
 WORKDIR /var/www/html
 RUN composer config repositories.snipeit-oidc path packages/snipeit-oidc \
- && composer require bausteln/snipeit-oidc:* --no-interaction --no-scripts \
+ && composer require 'bausteln/snipeit-oidc:*@dev' --no-interaction --no-scripts \
  && composer dump-autoload --optimize
 
 # Patch the login template. Fails the build (rather than producing a broken
