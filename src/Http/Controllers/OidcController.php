@@ -75,10 +75,12 @@ class OidcController extends Controller
 
         $oidc->setRedirectURL(config('oidc.redirect_uri'));
 
-        foreach (explode(' ', config('oidc.scopes')) as $scope) {
-            if ($scope !== '') {
-                $oidc->addScope($scope);
-            }
+        $scopes = array_values(array_filter(
+            preg_split('/\s+/', (string) config('oidc.scopes')) ?: [],
+            static fn ($s) => $s !== ''
+        ));
+        if ($scopes !== []) {
+            $oidc->addScope($scopes);
         }
 
         return $oidc;
