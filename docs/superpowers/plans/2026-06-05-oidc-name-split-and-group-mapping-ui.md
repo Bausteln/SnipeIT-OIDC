@@ -98,6 +98,11 @@ Replace the file's `"require"` block tail and add three keys so the result is:
     "scripts": {
         "test": "phpunit"
     },
+    "config": {
+        "platform": {
+            "php": "8.4.99"
+        }
+    },
     "extra": {
         "laravel": {
             "providers": [
@@ -108,6 +113,11 @@ Replace the file's `"require"` block tail and add three keys so the result is:
     "minimum-stability": "stable"
 }
 ```
+
+> **Dev-env note (PHP 8.5 local):** the `config.platform.php` pin makes Composer
+> resolve dependencies against 8.4 (the CI target ceiling) so PHPUnit/Laravel
+> constraints don't trip on the newer 8.5 binary. A library's `config.platform`
+> is ignored by downstream root projects (Snipe-IT), so this is dev-only.
 
 - [ ] **Step 2: Create `phpunit.xml`**
 
