@@ -18,5 +18,6 @@ composer.phar
 
 # Test / build artifacts
 .phpunit.result.cache
+/.phpunit.cache
 coverage/
 build/
