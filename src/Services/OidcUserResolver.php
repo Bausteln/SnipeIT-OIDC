@@ -2,9 +2,9 @@
 
 namespace Bausteln\SnipeitOidc\Services;
 
-use App\Models\Group;
 use App\Models\User;
-use Illuminate\Support\Facades\DB;
+use Bausteln\SnipeitOidc\Models\OidcGroupMapping;
+use Bausteln\SnipeitOidc\Support\NameSplitter;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -78,14 +78,14 @@ class OidcUserResolver
 
         $email     = $claims[$map['email']]      ?? null;
         $username  = $claims[$map['username']]   ?? ($email ? Str::before($email, '@') : null);
-        $firstName = $claims[$map['first_name']] ?? null;
-        $lastName  = $claims[$map['last_name']]  ?? null;
+        // Prefer explicit given_name/family_name; otherwise split a combined
+        // name (e.g. given_name = "Andrin Monn" with no family_name).
+        [$firstName, $lastName] = $this->resolveName($claims);
 
         // Snipe-IT's ValidatingTrait enforces `first_name => required` at the
         // model level. Fall back to the email local-part so login never fails
-        // on an IdP profile that's missing `given_name`. Admins can fix it in
-        // the Snipe-IT UI later; the next OIDC login will sync from claims if
-        // the IdP starts sending the name.
+        // on an IdP profile that's missing a name. Admins can fix it in the
+        // Snipe-IT UI later; the next OIDC login re-syncs from claims.
         if (! $firstName) {
             $firstName = $email ? Str::before($email, '@') : 'OIDC User';
         }
@@ -94,7 +94,7 @@ class OidcUserResolver
         $user->username    = $username;
         $user->email       = $email;
         $user->first_name  = $firstName;
-        $user->last_name   = $lastName ?? '';
+        $user->last_name   = $lastName;
         $user->activated   = 1;
         // Random password — login is via OIDC only. Length matches Snipe-IT defaults.
         $user->password    = bcrypt(Str::random(40));
@@ -108,10 +108,19 @@ class OidcUserResolver
     {
         $map = config('oidc.claim_map');
 
-        // Keep names + email fresh — the IdP is the source of truth.
-        $user->email      = $claims[$map['email']]      ?? $user->email;
-        $user->first_name = $claims[$map['first_name']] ?? $user->first_name;
-        $user->last_name  = $claims[$map['last_name']]  ?? $user->last_name;
+        // Keep email fresh — the IdP is the source of truth.
+        $user->email = $claims[$map['email']] ?? $user->email;
+
+        [$firstName, $lastName] = $this->resolveName($claims);
+        if ($firstName) {
+            $user->first_name = $firstName;
+        }
+        // Only overwrite last_name when resolveName produced one — don't blank an
+        // admin's manual correction on a login that yielded no last name. (When the
+        // IdP sends an explicit family_name, resolveName already returns it here.)
+        if ($lastName !== '') {
+            $user->last_name = $lastName;
+        }
 
         $this->saveOrThrow($user, 'syncFromClaims');
     }
@@ -141,24 +150,66 @@ class OidcUserResolver
     }
 
     /**
-     * Map OIDC group claims onto Snipe-IT permissions/groups.
+     * Resolve [first, last] from claims.
      *
-     * Policy: authoritative sync. The IdP is the source of truth, so every
-     * login we (a) recompute the superuser flag from admin_groups and
-     * (b) sync the user's Snipe-IT groups to exactly match the claim.
+     * - Both given_name and family_name present -> trust the explicit pair.
+     * - family_name missing but given_name is combined ("Andrin Monn") -> split.
+     * - single token / empty -> [first|null, ''] (caller applies email fallback).
      *
-     * Unknown claim values (no matching Snipe-IT group) are skipped
-     * intentionally — auto-creating groups would let IdP typos pollute
-     * Snipe-IT's permission model.
+     * @return array{0: ?string, 1: string}
+     */
+    private function resolveName(array $claims): array
+    {
+        $map   = config('oidc.claim_map');
+        $first = trim((string) ($claims[$map['first_name']] ?? ''));
+        $last  = trim((string) ($claims[$map['last_name']]  ?? ''));
+
+        if ($last !== '') {
+            // first name is null when given_name is absent but family_name is
+            // present; provision()/syncFromClaims() handle the null.
+            return [$first !== '' ? $first : null, $last];
+        }
+
+        if (str_contains($first, ' ')) {
+            return NameSplitter::split($first); // [first token, remainder]
+        }
+
+        return [$first !== '' ? $first : null, ''];
+    }
+
+    /**
+     * Map OIDC group claims onto Snipe-IT groups + the superuser flag.
+     *
+     * Policy: the oidc_group_mappings table is the single source of truth.
+     * Only OIDC groups present (and enabled) in the table sync; everything
+     * else is ignored. Superuser is granted by any matched mapping flagged
+     * grants_superuser, OR by the OIDC_ADMIN_GROUPS env break-glass list.
      */
     private function applyGroupMapping(User $user, array $claims): void
     {
         $map         = config('oidc.claim_map');
-        $claimGroups = (array) ($claims[$map['groups']] ?? []);
-        $adminGroups = config('oidc.admin_groups');
+        // Keep non-empty claim values, but don't let a bare array_filter() drop a
+        // legitimate group literally named "0" (falsy under array_filter's default).
+        $claimGroups = array_values(array_filter(
+            (array) ($claims[$map['groups']] ?? []),
+            static fn ($v) => $v !== '' && $v !== null && $v !== false,
+        ));
 
-        $perms = json_decode($user->permissions, true) ?: [];
-        if (array_intersect($claimGroups, $adminGroups)) {
+        $mappings = OidcGroupMapping::query()
+            ->where('enabled', true)
+            ->whereIn('oidc_group', $claimGroups)
+            ->get();
+
+        $groupIds = $mappings->pluck('snipe_group_id')->unique()->values()->all();
+
+        $adminGroups = config('oidc.admin_groups');
+        $isSuper = $mappings->contains(fn (OidcGroupMapping $m) => $m->grants_superuser)
+            || (bool) array_intersect($claimGroups, $adminGroups);
+
+        // Snipe-IT's users.permissions can be null; cast so json_decode() doesn't
+        // hit the PHP 8.1+ "null to string" deprecation.
+        $perms = json_decode((string) $user->permissions, true) ?: [];
+        if ($isSuper) {
             $perms['superuser'] = '1';
         } else {
             unset($perms['superuser']);
@@ -166,12 +217,15 @@ class OidcUserResolver
         $user->permissions = json_encode($perms);
         $this->saveOrThrow($user, 'applyGroupMapping');
 
-        $groupIds = Group::whereIn('name', $claimGroups)->pluck('id')->all();
-        $missing  = array_diff($claimGroups, Group::whereIn('name', $claimGroups)->pluck('name')->all());
-        if ($missing) {
-            Log::info('OIDC: skipping unknown groups from claim', ['user' => $user->username, 'missing' => array_values($missing)]);
-        }
-
+        // Authoritative: detaches Snipe-IT groups no longer backed by a mapping.
         $user->groups()->sync($groupIds);
+
+        $unmapped = array_diff($claimGroups, $mappings->pluck('oidc_group')->all());
+        if ($unmapped) {
+            Log::debug('OIDC: unmapped groups from claim', [
+                'user'     => $user->username,
+                'unmapped' => array_values($unmapped),
+            ]);
+        }
     }
 }
