@@ -5,7 +5,6 @@ namespace Bausteln\SnipeitOidc\Services;
 use App\Models\User;
 use Bausteln\SnipeitOidc\Models\OidcGroupMapping;
 use Bausteln\SnipeitOidc\Support\NameSplitter;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
