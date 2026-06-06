@@ -16,15 +16,20 @@ FROM snipe/snipe-it:${SNIPEIT_VERSION}
 # Vendor the plugin
 COPY snipeit-oidc /var/www/html/packages/snipeit-oidc
 
-# Register and install the plugin into Snipe-IT. The base image is a
-# `composer install --no-dev` production build, so we update WITHOUT dev
-# dependencies here too (--update-no-dev): pulling Snipe-IT's dev tools
-# (phpunit, mockery, …) is wrong for a prod image and would need authenticated
-# cross-repo GitHub archive downloads that the Actions GITHUB_TOKEN cannot do
-# (it 401s). The plugin's runtime dep (jumbojett/openid-connect-php) resolves
-# anonymously from Packagist — a handful of requests, well under the rate limit.
+# Register and install the plugin into Snipe-IT. Two CI-safety measures:
+#
+#  * use-github-api false — Snipe-IT's composer.json declares a GitHub *VCS*
+#    repository (grokability/laravel-scim-server), so `composer require` must
+#    read its metadata from GitHub. api.github.com is rate-limited on CI runners
+#    (403) and rejects the Actions GITHUB_TOKEN (401); telling Composer to use
+#    anonymous git (ls-remote/clone) instead sidesteps the API entirely.
+#  * --update-no-dev — the base image is a `composer install --no-dev`
+#    production build; pulling Snipe-IT's dev tools (phpunit, mockery, …) is
+#    wrong for a prod image and multiplies the GitHub fetches. This keeps the
+#    update to the plugin + its one runtime dep (jumbojett/openid-connect-php).
 WORKDIR /var/www/html
-RUN composer config repositories.snipeit-oidc path packages/snipeit-oidc \
+RUN composer config --global use-github-api false \
+ && composer config repositories.snipeit-oidc path packages/snipeit-oidc \
  && composer require 'bausteln/snipeit-oidc:*@dev' --no-interaction --no-scripts --update-no-dev \
  && composer dump-autoload --optimize
 
