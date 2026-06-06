@@ -16,15 +16,18 @@ FROM snipe/snipe-it:${SNIPEIT_VERSION}
 # Vendor the plugin
 COPY snipeit-oidc /var/www/html/packages/snipeit-oidc
 
-# Register and install. The optional `composer_auth` buildkit secret carries
-# COMPOSER_AUTH JSON (e.g. {"github-oauth":{"github.com":"<token>"}}) so
-# transitive metadata fetches don't hit anonymous GitHub rate limits.
-# Its value is stripped of stray CR/LF before use: docker/build-push-action's
-# `secrets:` block can introduce a newline that Composer otherwise rejects as an
-# "invalid character" in the github-oauth token.
+# Register and install. The optional `github_token` buildkit secret carries a
+# raw GitHub token so transitive metadata fetches don't hit anonymous GitHub
+# rate limits. We whitelist it to valid token characters (tr -cd) before
+# configuring composer: docker/build-push-action's `secrets:` block can inject a
+# stray character that the base image's Composer rejects as an "invalid
+# character" in the github-oauth token when it loads config. (The token *format*
+# is fine — Composer accepts ghs_/ghp_ tokens; only the injected byte breaks it.)
 WORKDIR /var/www/html
-RUN --mount=type=secret,id=composer_auth,required=false \
-    if [ -f /run/secrets/composer_auth ]; then export COMPOSER_AUTH="$(tr -d '\r\n' < /run/secrets/composer_auth)"; fi; \
+RUN --mount=type=secret,id=github_token,required=false \
+    if [ -f /run/secrets/github_token ]; then \
+      composer config --global github-oauth.github.com "$(tr -cd 'A-Za-z0-9_' < /run/secrets/github_token)"; \
+    fi; \
     composer config repositories.snipeit-oidc path packages/snipeit-oidc \
  && composer require 'bausteln/snipeit-oidc:*@dev' --no-interaction --no-scripts \
  && composer dump-autoload --optimize
