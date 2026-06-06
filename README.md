@@ -47,7 +47,13 @@ or any other compliant IdP.
    php artisan vendor:publish --tag=oidc-config
    ```
 
-4. Add to Snipe-IT's `.env`:
+4. Run the plugin migration (creates the `oidc_group_mappings` table):
+
+   ```bash
+   php artisan migrate
+   ```
+
+5. Add to Snipe-IT's `.env`:
 
    ```ini
    OIDC_ENABLED=true
@@ -59,7 +65,7 @@ or any other compliant IdP.
    OIDC_ADMIN_GROUPS=snipeit-admins,it-ops
    ```
 
-5. Add the SSO button to the login page. Edit
+6. Add the SSO button to the login page. Edit
    `resources/views/auth/login.blade.php` in your Snipe-IT install and
    add this line below the existing login form:
 
@@ -67,7 +73,7 @@ or any other compliant IdP.
    @include('oidc::login-button')
    ```
 
-6. Register the redirect URI in your IdP: `https://<your-snipeit>/oidc/callback`
+7. Register the redirect URI in your IdP: `https://<your-snipeit>/oidc/callback`
 
 ---
 
@@ -93,11 +99,41 @@ emits non-standard claim names.
 > promoted, change their preferred name. `sub` is always stable but rarely
 > human-readable; `preferred_username` is the usual sweet spot.
 
-### Group mapping (USER DECISION REQUIRED)
+### Group mapping (managed in the Snipe-IT UI)
 
-Open `src/Services/OidcUserResolver.php` and implement `applyGroupMapping()`.
-The skeleton is in place; you decide the policy. See the docblock on that
-method for the three common strategies (additive / authoritative / first-login).
+Group sync is driven by a database table managed from within Snipe-IT —
+no code editing required.
+
+1. Run the plugin's migration once (creates `oidc_group_mappings`):
+
+   ```bash
+   php artisan migrate
+   ```
+
+   The documented Docker/k8s images already run `migrate` on boot.
+
+2. As a Snipe-IT **superuser**, open **`/oidc/admin/groups`** (optionally add a
+   sidebar link — see below). Add rows mapping each OIDC group claim value to a
+   Snipe-IT group. Tick **Grants superuser** to make that OIDC group an admin.
+
+**The table is the single source of truth:** only OIDC groups listed here sync,
+and it doubles as the allowlist. After upgrading, **no groups sync until you add
+mappings** — set permissions once on the Snipe-IT groups and every member of the
+mapped OIDC group inherits them.
+
+**Break-glass:** `OIDC_ADMIN_GROUPS` (env) still grants superuser independently
+of the table, so a misconfiguration can't lock every admin out. A local admin
+login remains available too.
+
+**Azure AD:** the `groups` claim emits group **object IDs** (GUIDs), not names —
+enter the GUID in the "OIDC group" field.
+
+Optional sidebar link — patch Snipe-IT's sidebar partial once, mirroring the
+login-button approach:
+
+```blade
+@include('oidc::admin-nav-link')
+```
 
 ---
 
