@@ -100,7 +100,7 @@ Replace the file's `"require"` block tail and add three keys so the result is:
     },
     "config": {
         "platform": {
-            "php": "8.4.99"
+            "php": "8.2.0"
         }
     },
     "extra": {
@@ -114,10 +114,15 @@ Replace the file's `"require"` block tail and add three keys so the result is:
 }
 ```
 
-> **Dev-env note (PHP 8.5 local):** the `config.platform.php` pin makes Composer
-> resolve dependencies against 8.4 (the CI target ceiling) so PHPUnit/Laravel
-> constraints don't trip on the newer 8.5 binary. A library's `config.platform`
-> is ignored by downstream root projects (Snipe-IT), so this is dev-only.
+> **Dev-env note:** pin `config.platform.php` to the project **floor** `8.2.0`
+> (matching `"php": "^8.2"`), NOT a ceiling. This makes Composer resolve the same
+> PHP-8.2-compatible dependency set everywhere — local dev (PHP 8.5) and every CI
+> matrix job (8.2/8.3/8.4) — so the generated `vendor/composer/platform_check.php`
+> gates only at `>= 8.2.0` and passes on all runners. Pinning to a ceiling like
+> `8.4.99` instead pulls in deps that require PHP `>= 8.4.1` (e.g. `symfony/clock`
+> 8.x via carbon) and makes `vendor/` fatal-error on the 8.2/8.3 CI runners.
+> (A library's `config.platform` is ignored by downstream root projects like
+> Snipe-IT — but in CI *this* repo is the root, so it applies there.)
 
 - [ ] **Step 2: Create `phpunit.xml`**
 
