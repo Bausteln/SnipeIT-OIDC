@@ -3,7 +3,7 @@
 namespace Bausteln\SnipeitOidc\Services;
 
 use App\Models\User;
-use Bausteln\SnipeitOidc\Models\OidcGroupMapping;
+use Bausteln\SnipeitOidc\Models\OidcGroup;
 use Bausteln\SnipeitOidc\Support\NameSplitter;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -67,7 +67,7 @@ class OidcUserResolver
             $this->syncFromClaims($user, $claims);
         }
 
-        $this->applyGroupMapping($user, $claims);
+        $this->syncGroups($user, $claims);
 
         return $user;
     }
@@ -178,14 +178,20 @@ class OidcUserResolver
     }
 
     /**
-     * Map OIDC group claims onto Snipe-IT groups + the superuser flag.
+     * Discover OIDC groups and sync the user's Snipe-IT group memberships.
      *
-     * Policy: the oidc_group_mappings table is the single source of truth.
-     * Only OIDC groups present (and enabled) in the table sync; everything
-     * else is ignored. Superuser is granted by any matched mapping flagged
-     * grants_superuser, OR by the OIDC_ADMIN_GROUPS env break-glass list.
+     * Policy:
+     *  - Every claimed group is recorded in `oidc_groups` so an admin can pick
+     *    it in the UI (groups appear after the first login that presents them).
+     *  - Only admin-enabled groups (sync_enabled, with a Snipe-IT group already
+     *    created) are synced. Membership sync is NON-destructive: it never
+     *    touches Snipe-IT groups that OIDC doesn't manage (e.g. manual ones).
+     *  - Group-based superuser is left to the Snipe-IT group's own permissions
+     *    (Snipe-IT derives superuser from effective group permissions).
+     *    OIDC_ADMIN_GROUPS (env) stays as a break-glass that grants superuser
+     *    directly, independent of any group.
      */
-    private function applyGroupMapping(User $user, array $claims): void
+    private function syncGroups(User $user, array $claims): void
     {
         $map         = config('oidc.claim_map');
         // Keep non-empty claim values, but don't let a bare array_filter() drop a
@@ -195,37 +201,44 @@ class OidcUserResolver
             static fn ($v) => $v !== '' && $v !== null && $v !== false,
         ));
 
-        $mappings = OidcGroupMapping::query()
-            ->where('enabled', true)
-            ->whereIn('oidc_group', $claimGroups)
-            ->get();
-
-        $groupIds = $mappings->pluck('snipe_group_id')->unique()->values()->all();
-
-        $adminGroups = config('oidc.admin_groups');
-        $isSuper = $mappings->contains(fn (OidcGroupMapping $m) => $m->grants_superuser)
-            || (bool) array_intersect($claimGroups, $adminGroups);
-
-        // Snipe-IT's users.permissions can be null; cast so json_decode() doesn't
-        // hit the PHP 8.1+ "null to string" deprecation.
-        $perms = json_decode((string) $user->permissions, true) ?: [];
-        if ($isSuper) {
-            $perms['superuser'] = '1';
-        } else {
-            unset($perms['superuser']);
+        // Discovery: ensure a row exists for each claimed group (new ones default
+        // to not-synced) so it shows up in the admin UI, then bump last_seen_at in
+        // a single query rather than one save() per group.
+        foreach ($claimGroups as $name) {
+            OidcGroup::firstOrCreate(['name' => $name]);
         }
-        $user->permissions = json_encode($perms);
-        $this->saveOrThrow($user, 'applyGroupMapping');
+        if ($claimGroups) {
+            OidcGroup::whereIn('name', $claimGroups)->update(['last_seen_at' => now()]);
+        }
 
-        // Authoritative: detaches Snipe-IT groups no longer backed by a mapping.
-        $user->groups()->sync($groupIds);
+        // Managed = admin-enabled groups that have a Snipe-IT group; claimed =
+        // those the user actually presented this login.
+        $managed    = OidcGroup::where('sync_enabled', true)->whereNotNull('snipe_group_id')->get();
+        $managedIds = $managed->pluck('snipe_group_id')->map(fn ($id) => (int) $id)->all();
+        $claimedIds = $managed->whereIn('name', $claimGroups)
+            ->pluck('snipe_group_id')->map(fn ($id) => (int) $id)->values()->all();
 
-        $unmapped = array_diff($claimGroups, $mappings->pluck('oidc_group')->all());
-        if ($unmapped) {
-            Log::debug('OIDC: unmapped groups from claim', [
-                'user'     => $user->username,
-                'unmapped' => array_values($unmapped),
-            ]);
+        // Non-destructive: add the claimed memberships, then remove only the
+        // OIDC-managed groups the user is no longer claimed in. Manually-assigned
+        // (non-managed) groups are never touched.
+        if ($claimedIds) {
+            $user->groups()->syncWithoutDetaching($claimedIds);
+        }
+        $toDetach = array_values(array_diff($managedIds, $claimedIds));
+        if ($toDetach) {
+            $user->groups()->detach($toDetach);
+        }
+
+        // Break-glass: env-listed groups grant superuser directly. Grant-only —
+        // we never revoke a superuser flag an admin may have set by hand.
+        $adminGroups = config('oidc.admin_groups');
+        if (array_intersect($claimGroups, $adminGroups)) {
+            $perms = json_decode((string) $user->permissions, true) ?: [];
+            if (($perms['superuser'] ?? null) !== '1') {
+                $perms['superuser'] = '1';
+                $user->permissions = json_encode($perms);
+                $this->saveOrThrow($user, 'syncGroups:breakglass');
+            }
         }
     }
 }
