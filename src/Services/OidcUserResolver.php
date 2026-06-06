@@ -2,8 +2,8 @@
 
 namespace Bausteln\SnipeitOidc\Services;
 
-use App\Models\Group;
 use App\Models\User;
+use Bausteln\SnipeitOidc\Models\OidcGroupMapping;
 use Bausteln\SnipeitOidc\Support\NameSplitter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -179,24 +179,38 @@ class OidcUserResolver
     }
 
     /**
-     * Map OIDC group claims onto Snipe-IT permissions/groups.
+     * Map OIDC group claims onto Snipe-IT groups + the superuser flag.
      *
-     * Policy: authoritative sync. The IdP is the source of truth, so every
-     * login we (a) recompute the superuser flag from admin_groups and
-     * (b) sync the user's Snipe-IT groups to exactly match the claim.
-     *
-     * Unknown claim values (no matching Snipe-IT group) are skipped
-     * intentionally — auto-creating groups would let IdP typos pollute
-     * Snipe-IT's permission model.
+     * Policy: the oidc_group_mappings table is the single source of truth.
+     * Only OIDC groups present (and enabled) in the table sync; everything
+     * else is ignored. Superuser is granted by any matched mapping flagged
+     * grants_superuser, OR by the OIDC_ADMIN_GROUPS env break-glass list.
      */
     private function applyGroupMapping(User $user, array $claims): void
     {
         $map         = config('oidc.claim_map');
-        $claimGroups = (array) ($claims[$map['groups']] ?? []);
-        $adminGroups = config('oidc.admin_groups');
+        // Keep non-empty claim values, but don't let a bare array_filter() drop a
+        // legitimate group literally named "0" (falsy under array_filter's default).
+        $claimGroups = array_values(array_filter(
+            (array) ($claims[$map['groups']] ?? []),
+            static fn ($v) => $v !== '' && $v !== null && $v !== false,
+        ));
 
-        $perms = json_decode($user->permissions, true) ?: [];
-        if (array_intersect($claimGroups, $adminGroups)) {
+        $mappings = OidcGroupMapping::query()
+            ->where('enabled', true)
+            ->whereIn('oidc_group', $claimGroups)
+            ->get();
+
+        $groupIds = $mappings->pluck('snipe_group_id')->unique()->values()->all();
+
+        $adminGroups = config('oidc.admin_groups');
+        $isSuper = $mappings->contains(fn (OidcGroupMapping $m) => $m->grants_superuser)
+            || (bool) array_intersect($claimGroups, $adminGroups);
+
+        // Snipe-IT's users.permissions can be null; cast so json_decode() doesn't
+        // hit the PHP 8.1+ "null to string" deprecation.
+        $perms = json_decode((string) $user->permissions, true) ?: [];
+        if ($isSuper) {
             $perms['superuser'] = '1';
         } else {
             unset($perms['superuser']);
@@ -204,12 +218,15 @@ class OidcUserResolver
         $user->permissions = json_encode($perms);
         $this->saveOrThrow($user, 'applyGroupMapping');
 
-        $groupIds = Group::whereIn('name', $claimGroups)->pluck('id')->all();
-        $missing  = array_diff($claimGroups, Group::whereIn('name', $claimGroups)->pluck('name')->all());
-        if ($missing) {
-            Log::info('OIDC: skipping unknown groups from claim', ['user' => $user->username, 'missing' => array_values($missing)]);
-        }
-
+        // Authoritative: detaches Snipe-IT groups no longer backed by a mapping.
         $user->groups()->sync($groupIds);
+
+        $unmapped = array_diff($claimGroups, $mappings->pluck('oidc_group')->all());
+        if ($unmapped) {
+            Log::debug('OIDC: unmapped groups from claim', [
+                'user'     => $user->username,
+                'unmapped' => array_values($unmapped),
+            ]);
+        }
     }
 }
