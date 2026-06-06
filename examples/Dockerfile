@@ -16,20 +16,21 @@ FROM snipe/snipe-it:${SNIPEIT_VERSION}
 # Vendor the plugin
 COPY snipeit-oidc /var/www/html/packages/snipeit-oidc
 
-# Register and install. The optional `github_token` buildkit secret carries a
-# raw GitHub token so transitive metadata fetches don't hit anonymous GitHub
-# rate limits. We whitelist it to valid token characters (tr -cd) before
-# configuring composer: docker/build-push-action's `secrets:` block can inject a
-# stray character that the base image's Composer rejects as an "invalid
-# character" in the github-oauth token when it loads config. (The token *format*
-# is fine — Composer accepts ghs_/ghp_ tokens; only the injected byte breaks it.)
+# Register and install the plugin into Snipe-IT. Two CI-safety measures:
+#
+#  * use-github-api false — Snipe-IT's composer.json declares a GitHub *VCS*
+#    repository (grokability/laravel-scim-server), so `composer require` must
+#    read its metadata from GitHub. api.github.com is rate-limited on CI runners
+#    (403) and rejects the Actions GITHUB_TOKEN (401); telling Composer to use
+#    anonymous git (ls-remote/clone) instead sidesteps the API entirely.
+#  * --update-no-dev — the base image is a `composer install --no-dev`
+#    production build; pulling Snipe-IT's dev tools (phpunit, mockery, …) is
+#    wrong for a prod image and multiplies the GitHub fetches. This keeps the
+#    update to the plugin + its one runtime dep (jumbojett/openid-connect-php).
 WORKDIR /var/www/html
-RUN --mount=type=secret,id=github_token,required=false \
-    if [ -f /run/secrets/github_token ]; then \
-      composer config --global github-oauth.github.com "$(tr -cd 'A-Za-z0-9_' < /run/secrets/github_token)"; \
-    fi; \
-    composer config repositories.snipeit-oidc path packages/snipeit-oidc \
- && composer require 'bausteln/snipeit-oidc:*@dev' --no-interaction --no-scripts \
+RUN composer config --global use-github-api false \
+ && composer config repositories.snipeit-oidc path packages/snipeit-oidc \
+ && composer require 'bausteln/snipeit-oidc:*@dev' --no-interaction --no-scripts --update-no-dev \
  && composer dump-autoload --optimize
 
 # Patch the login template. Fails the build (rather than producing a broken

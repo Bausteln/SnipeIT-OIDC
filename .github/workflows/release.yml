@@ -91,8 +91,6 @@ jobs:
           push: true
           build-args: |
             SNIPEIT_VERSION=${{ steps.base.outputs.version }}
-          secrets: |
-            github_token=${{ secrets.GITHUB_TOKEN }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
