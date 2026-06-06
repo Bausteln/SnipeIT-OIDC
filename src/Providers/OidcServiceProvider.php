@@ -3,6 +3,7 @@
 namespace Bausteln\SnipeitOidc\Providers;
 
 use Bausteln\SnipeitOidc\Http\Middleware\AutoRedirectToOidc;
+use Bausteln\SnipeitOidc\Http\Middleware\EnsureSuperUser;
 use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Route;
@@ -21,6 +22,10 @@ class OidcServiceProvider extends ServiceProvider
             __DIR__ . '/../../config/oidc.php' => config_path('oidc.php'),
         ], 'oidc-config');
 
+        // Always register migrations so the schema exists even when the plugin
+        // is toggled off between deploys.
+        $this->loadMigrationsFrom(__DIR__ . '/../../database/migrations');
+
         // Only register routes when the plugin is turned on
         if (config('oidc.enabled') !== true) {
             return;
@@ -29,6 +34,11 @@ class OidcServiceProvider extends ServiceProvider
         Route::middleware('web')
             ->namespace('Bausteln\\SnipeitOidc\\Http\\Controllers')
             ->group(__DIR__ . '/../../routes/web.php');
+
+        // Admin UI: authenticated superusers only.
+        Route::middleware(['web', 'auth', EnsureSuperUser::class])
+            ->namespace('Bausteln\\SnipeitOidc\\Http\\Controllers')
+            ->group(__DIR__ . '/../../routes/admin.php');
 
         $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'oidc');
 
