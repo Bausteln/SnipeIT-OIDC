@@ -1,7 +1,7 @@
 @extends('layouts/default')
 
 @section('title')
-    OIDC Group Mappings
+    OIDC Groups
 @parent
 @stop
 
@@ -23,29 +23,17 @@
     @endif
 
     <div class="box box-default">
-      <div class="box-header with-border"><h2 class="box-title">Add mapping</h2></div>
+      <div class="box-header with-border"><h2 class="box-title">Add an OIDC group manually</h2></div>
       <div class="box-body">
+        <p class="text-muted" style="margin-bottom:0.75rem;">
+          Groups also appear here automatically after a user logs in with them.
+        </p>
         <form method="POST" action="{{ route('oidc.admin.groups.store') }}" class="form-inline">
           @csrf
           <div class="form-group">
-            <label for="oidc_group">OIDC group</label>
-            <input type="text" name="oidc_group" id="oidc_group" class="form-control"
-                   value="{{ old('oidc_group') }}" placeholder="e.g. kc-it-admins" required>
-          </div>
-          <div class="form-group">
-            <label for="snipe_group_id">Snipe-IT group</label>
-            <select name="snipe_group_id" id="snipe_group_id" class="form-control" required>
-              <option value="">— select —</option>
-              @foreach ($groups as $group)
-                <option value="{{ $group->id }}" @selected(old('snipe_group_id') == $group->id)>{{ $group->name }}</option>
-              @endforeach
-            </select>
-          </div>
-          <div class="checkbox">
-            <label><input type="checkbox" name="grants_superuser" value="1" @checked(old('grants_superuser'))> Grants superuser</label>
-          </div>
-          <div class="checkbox">
-            <label><input type="checkbox" name="enabled" value="1" @checked(old('enabled', true))> Enabled</label>
+            <label for="name">OIDC group name</label>
+            <input type="text" name="name" id="name" class="form-control"
+                   value="{{ old('name') }}" placeholder="e.g. kc-it-admins" required>
           </div>
           <button type="submit" class="btn btn-primary">Add</button>
         </form>
@@ -53,47 +41,57 @@
     </div>
 
     <div class="box box-default">
-      <div class="box-header with-border"><h2 class="box-title">Mappings</h2></div>
+      <div class="box-header with-border"><h2 class="box-title">Discovered OIDC groups</h2></div>
       <div class="box-body table-responsive">
         <table class="table table-striped">
           <thead>
             <tr>
-              <th>OIDC group</th><th>Snipe-IT group</th>
-              <th>Superuser</th><th>Enabled</th><th class="text-right">Actions</th>
+              <th>OIDC group</th>
+              <th>Last seen</th>
+              <th>Snipe-IT group</th>
+              <th>Sync</th>
+              <th class="text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
-          @forelse ($mappings as $mapping)
+          @forelse ($groups as $group)
             <tr>
+              <td>{{ $group->name }}</td>
+              <td>{{ $group->last_seen_at ? $group->last_seen_at->diffForHumans() : '—' }}</td>
               <td>
-                <form id="edit-{{ $mapping->id }}" method="POST" action="{{ route('oidc.admin.groups.update', $mapping) }}">
+                @if ($group->snipeGroup)
+                  <a href="{{ url('/groups/'.$group->snipeGroup->id.'/edit') }}">
+                    {{ $group->snipeGroup->name }} — set permissions
+                  </a>
+                @else
+                  <span class="text-muted">not created yet</span>
+                @endif
+              </td>
+              <td>
+                <form method="POST" action="{{ route('oidc.admin.groups.toggle', $group) }}" style="margin:0;">
                   @csrf
-                  @method('PUT')
+                  @method('PATCH')
+                  <label style="font-weight:normal; margin:0; cursor:pointer;">
+                    <input type="checkbox" name="sync_enabled" value="1"
+                           @checked($group->sync_enabled) onchange="this.form.submit()">
+                    {{ $group->sync_enabled ? 'syncing' : 'off' }}
+                  </label>
                 </form>
-                <input form="edit-{{ $mapping->id }}" type="text" name="oidc_group"
-                       class="form-control" value="{{ $mapping->oidc_group }}" required>
               </td>
-              <td>
-                <select form="edit-{{ $mapping->id }}" name="snipe_group_id" class="form-control" required>
-                  @foreach ($groups as $group)
-                    <option value="{{ $group->id }}" @selected($mapping->snipe_group_id == $group->id)>{{ $group->name }}</option>
-                  @endforeach
-                </select>
-              </td>
-              <td><input form="edit-{{ $mapping->id }}" type="checkbox" name="grants_superuser" value="1" @checked($mapping->grants_superuser)></td>
-              <td><input form="edit-{{ $mapping->id }}" type="checkbox" name="enabled" value="1" @checked($mapping->enabled)></td>
-              <td class="text-right" style="white-space:nowrap;">
-                <button form="edit-{{ $mapping->id }}" type="submit" class="btn btn-sm btn-default">Save</button>
-                <form method="POST" action="{{ route('oidc.admin.groups.destroy', $mapping) }}"
-                      style="display:inline;" onsubmit="return confirm('Remove this mapping?');">
+              <td class="text-right">
+                <form method="POST" action="{{ route('oidc.admin.groups.destroy', $group) }}"
+                      style="display:inline;" onsubmit="return confirm('Remove this group from the list?');">
                   @csrf
                   @method('DELETE')
-                  <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                  <button type="submit" class="btn btn-sm btn-danger">Remove</button>
                 </form>
               </td>
             </tr>
           @empty
-            <tr><td colspan="5"><em>No mappings yet — OIDC groups will not sync until you add one.</em></td></tr>
+            <tr>
+              <td colspan="5"><em>No OIDC groups discovered yet — they appear here after users
+              log in, or add one manually above.</em></td>
+            </tr>
           @endforelse
           </tbody>
         </table>
