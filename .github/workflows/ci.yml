@@ -41,7 +41,7 @@ jobs:
       - name: php -l (syntax check)
         run: |
           set -e
-          files=$(find src config routes -type f -name "*.php")
+          files=$(find src config routes database -type f -name "*.php")
           if [ -z "$files" ]; then
             echo "No PHP files found to lint" >&2
             exit 1
@@ -54,3 +54,6 @@ jobs:
       - name: Resolve dependencies
         # Catches breakage from upstream conflicts before they hit users.
         run: composer install --no-progress --no-interaction --prefer-dist
+
+      - name: Unit tests
+        run: vendor/bin/phpunit --testdox
