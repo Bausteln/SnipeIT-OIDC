@@ -16,20 +16,16 @@ FROM snipe/snipe-it:${SNIPEIT_VERSION}
 # Vendor the plugin
 COPY snipeit-oidc /var/www/html/packages/snipeit-oidc
 
-# Register and install. The optional `github_token` buildkit secret carries a
-# raw GitHub token so transitive metadata fetches don't hit anonymous GitHub
-# rate limits. We whitelist it to valid token characters (tr -cd) before
-# configuring composer: docker/build-push-action's `secrets:` block can inject a
-# stray character that the base image's Composer rejects as an "invalid
-# character" in the github-oauth token when it loads config. (The token *format*
-# is fine — Composer accepts ghs_/ghp_ tokens; only the injected byte breaks it.)
+# Register and install the plugin into Snipe-IT. The base image is a
+# `composer install --no-dev` production build, so we update WITHOUT dev
+# dependencies here too (--update-no-dev): pulling Snipe-IT's dev tools
+# (phpunit, mockery, …) is wrong for a prod image and would need authenticated
+# cross-repo GitHub archive downloads that the Actions GITHUB_TOKEN cannot do
+# (it 401s). The plugin's runtime dep (jumbojett/openid-connect-php) resolves
+# anonymously from Packagist — a handful of requests, well under the rate limit.
 WORKDIR /var/www/html
-RUN --mount=type=secret,id=github_token,required=false \
-    if [ -f /run/secrets/github_token ]; then \
-      composer config --global github-oauth.github.com "$(tr -cd 'A-Za-z0-9_' < /run/secrets/github_token)"; \
-    fi; \
-    composer config repositories.snipeit-oidc path packages/snipeit-oidc \
- && composer require 'bausteln/snipeit-oidc:*@dev' --no-interaction --no-scripts \
+RUN composer config repositories.snipeit-oidc path packages/snipeit-oidc \
+ && composer require 'bausteln/snipeit-oidc:*@dev' --no-interaction --no-scripts --update-no-dev \
  && composer dump-autoload --optimize
 
 # Patch the login template. Fails the build (rather than producing a broken
