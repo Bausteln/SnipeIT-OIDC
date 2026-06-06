@@ -19,8 +19,12 @@ COPY snipeit-oidc /var/www/html/packages/snipeit-oidc
 # Register and install. The optional `composer_auth` buildkit secret carries
 # COMPOSER_AUTH JSON (e.g. {"github-oauth":{"github.com":"<token>"}}) so
 # transitive metadata fetches don't hit anonymous GitHub rate limits.
+# Its value is stripped of stray CR/LF before use: docker/build-push-action's
+# `secrets:` block can introduce a newline that Composer otherwise rejects as an
+# "invalid character" in the github-oauth token.
 WORKDIR /var/www/html
-RUN --mount=type=secret,id=composer_auth,env=COMPOSER_AUTH,required=false \
+RUN --mount=type=secret,id=composer_auth,required=false \
+    if [ -f /run/secrets/composer_auth ]; then export COMPOSER_AUTH="$(tr -d '\r\n' < /run/secrets/composer_auth)"; fi; \
     composer config repositories.snipeit-oidc path packages/snipeit-oidc \
  && composer require 'bausteln/snipeit-oidc:*@dev' --no-interaction --no-scripts \
  && composer dump-autoload --optimize
