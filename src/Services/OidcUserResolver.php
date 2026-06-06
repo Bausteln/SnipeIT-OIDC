@@ -4,6 +4,7 @@ namespace Bausteln\SnipeitOidc\Services;
 
 use App\Models\Group;
 use App\Models\User;
+use Bausteln\SnipeitOidc\Support\NameSplitter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -78,14 +79,14 @@ class OidcUserResolver
 
         $email     = $claims[$map['email']]      ?? null;
         $username  = $claims[$map['username']]   ?? ($email ? Str::before($email, '@') : null);
-        $firstName = $claims[$map['first_name']] ?? null;
-        $lastName  = $claims[$map['last_name']]  ?? null;
+        // Prefer explicit given_name/family_name; otherwise split a combined
+        // name (e.g. given_name = "Andrin Monn" with no family_name).
+        [$firstName, $lastName] = $this->resolveName($claims);
 
         // Snipe-IT's ValidatingTrait enforces `first_name => required` at the
         // model level. Fall back to the email local-part so login never fails
-        // on an IdP profile that's missing `given_name`. Admins can fix it in
-        // the Snipe-IT UI later; the next OIDC login will sync from claims if
-        // the IdP starts sending the name.
+        // on an IdP profile that's missing a name. Admins can fix it in the
+        // Snipe-IT UI later; the next OIDC login re-syncs from claims.
         if (! $firstName) {
             $firstName = $email ? Str::before($email, '@') : 'OIDC User';
         }
@@ -94,7 +95,7 @@ class OidcUserResolver
         $user->username    = $username;
         $user->email       = $email;
         $user->first_name  = $firstName;
-        $user->last_name   = $lastName ?? '';
+        $user->last_name   = $lastName;
         $user->activated   = 1;
         // Random password — login is via OIDC only. Length matches Snipe-IT defaults.
         $user->password    = bcrypt(Str::random(40));
@@ -108,10 +109,19 @@ class OidcUserResolver
     {
         $map = config('oidc.claim_map');
 
-        // Keep names + email fresh — the IdP is the source of truth.
-        $user->email      = $claims[$map['email']]      ?? $user->email;
-        $user->first_name = $claims[$map['first_name']] ?? $user->first_name;
-        $user->last_name  = $claims[$map['last_name']]  ?? $user->last_name;
+        // Keep email fresh — the IdP is the source of truth.
+        $user->email = $claims[$map['email']] ?? $user->email;
+
+        [$firstName, $lastName] = $this->resolveName($claims);
+        if ($firstName) {
+            $user->first_name = $firstName;
+        }
+        // Only overwrite last_name when resolveName produced one — don't blank an
+        // admin's manual correction on a login that yielded no last name. (When the
+        // IdP sends an explicit family_name, resolveName already returns it here.)
+        if ($lastName !== '') {
+            $user->last_name = $lastName;
+        }
 
         $this->saveOrThrow($user, 'syncFromClaims');
     }
@@ -138,6 +148,34 @@ class OidcUserResolver
             ]);
             throw $e;
         }
+    }
+
+    /**
+     * Resolve [first, last] from claims.
+     *
+     * - Both given_name and family_name present -> trust the explicit pair.
+     * - family_name missing but given_name is combined ("Andrin Monn") -> split.
+     * - single token / empty -> [first|null, ''] (caller applies email fallback).
+     *
+     * @return array{0: ?string, 1: string}
+     */
+    private function resolveName(array $claims): array
+    {
+        $map   = config('oidc.claim_map');
+        $first = trim((string) ($claims[$map['first_name']] ?? ''));
+        $last  = trim((string) ($claims[$map['last_name']]  ?? ''));
+
+        if ($last !== '') {
+            // first name is null when given_name is absent but family_name is
+            // present; provision()/syncFromClaims() handle the null.
+            return [$first !== '' ? $first : null, $last];
+        }
+
+        if (str_contains($first, ' ')) {
+            return NameSplitter::split($first); // [first token, remainder]
+        }
+
+        return [$first !== '' ? $first : null, ''];
     }
 
     /**
