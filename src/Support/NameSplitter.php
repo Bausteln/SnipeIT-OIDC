@@ -16,6 +16,9 @@ class NameSplitter
      */
     public static function split(string $full): array
     {
+        // preg_split is typed array|false in static-analysis stubs; the `?: []`
+        // narrows it to array for the checks below. With this fixed, valid
+        // pattern it never actually returns false at runtime.
         $parts = preg_split('/\s+/', trim($full), -1, PREG_SPLIT_NO_EMPTY) ?: [];
 
         if ($parts === []) {
